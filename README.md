@@ -59,14 +59,14 @@ This resulted in ChatGPT producing a \~1000 line text document `specs.txt` outli
 
 > **Gemini**
 > 
-> *attached specs.txt*
+> *attached specs.txt*\
 > This is a prompt for claude code to generate a flutter application that tracks satellites and is feature rich. Please help me refine this prompt to fully specify every detail so code generation can proceed smoothly. Modify this specification such that real data from free sources such as celestrak are included.
 
 It generated a much less verbose \~100 line document `specs2.txt`, which had many of the implementation related information missing. This shortening was against my intentions so I wrote 2 more prompts explaining the issues. This pattern of leaving out important information continued, despite it being told not to. After multiple attempts, I gave up and went back to ChatGPT to merge the conciseness of the shortened document and the detailed nature of the verbose document.
 
 > **ChatGPT**
 > 
-> *attached specs2.txt*
+> *attached specs2.txt*\
 > Optimize your prompt to align with claude's model, strict and explicit specification. Use the specs2.txt as an example.
 
 The result was a more refined \~700 lines of specification containig implementation details, project structure, APIs to use, user features and so on. Along with these, explicit steps were specified partition the code generation of Claude into phases so that it does not try to generate the whole project at once.
@@ -77,7 +77,7 @@ The result was a more refined \~700 lines of specification containig implementat
 
 > **Claude**
 > 
-> *attached specs_final.txt*
+> *attached specs_final.txt*\
 > Continue building the Orbitalis Flutter app by replacing all placeholder screens (TrackingScreen, SatelliteDetailScreen, MapScreen, LaunchesScreen, LaunchDetailScreen, NotificationsScreen, SettingsScreen) with full implementations, then run build_runner and get a clean analyze.
 
 The generation of the entire project with minor alterations afterwards took around 2-3 hours and used 60% of available tokens. The final application was not up to standard. There were several issues, out of which the most severe was the abismal performance. I tried to convey these to Claude:
