@@ -106,15 +106,19 @@ The first few steps of the development cycle were easy and kind of enjoyable, be
 
 **Orbitalis homepage**
 ![Homepage](images/homepage.jpg)
+---
 
 **Space related news section**
 ![News](images/news.jpg)
+---
 
 **Rocket launches and live streams**
 ![Launches](images/launches.jpg)
+---
 
 **Satellites available for tracking**
 ![Tracking](images/tracking.jpg)
+---
 
 **Map displaying all tracked satellites and the ISS**
 ![Map](images/map.jpg)
