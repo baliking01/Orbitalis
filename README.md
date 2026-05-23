@@ -55,7 +55,7 @@ When all the features and requirements have been agreed on, I prompted the AI to
 
 This resulted in ChatGPT producing a \~1000 line text document `specs.txt` outlining the key aspects of the project along with implementation specific details such as what Flutter packages and libraries to use and also what APIs are available for gathering satellite informations.
 
-I supplied the generated `specs.txt` to *Gemini* for refinement and optimizing for Claud's usage.
+2. I supplied the generated `specs.txt` to *Gemini* for refinement and optimizing for Claud's usage.
 
 > **Gemini**
 > 
@@ -71,7 +71,7 @@ It generated a much less verbose \~100 line document `specs2.txt`, which had man
 
 The result was a more refined \~700 lines of specification containig implementation details, project structure, APIs to use, user features and so on. Along with these, explicit steps were specified partition the code generation of Claude into phases so that it does not try to generate the whole project at once.
 
-Using Claude's most powerful model Opus 4.7, I once more asked the AI to generate a specification, now the final one such that it is optimized to its own capabilities. After this step, I switched over to a less powerful model, Sonet 4.6, so that its token consumption would be minimized, while still performing decent work.
+3. Using Claude's most powerful model Opus 4.7, I once more asked the AI to generate a specification, now the final one such that it is optimized to its own capabilities. After this step, I switched over to a less powerful model, Sonet 4.6, so that its token consumption would be minimized, while still performing decent work.
 
 (*The initial prompts were lost due to context compression; the one listed below is the earliest prompt after the skeleton project and minimal business logic has been generated.*)
 
