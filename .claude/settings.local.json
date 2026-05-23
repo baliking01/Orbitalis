@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter --version)",
+      "PowerShell(flutter --version 2>&1)",
+      "PowerShell($env:PATH)",
+      "Bash(\"C:\\\\Users\\\\HP\\\\Documents\\\\Flutter\\\\flutter\\\\bin\\\\flutter.bat\" pub *)",
+      "Bash(\"C:\\\\Users\\\\HP\\\\Documents\\\\Flutter\\\\flutter\\\\bin\\\\flutter.bat\" analyze *)",
+      "Bash(\"C:\\\\Users\\\\HP\\\\Documents\\\\Flutter\\\\flutter\\\\bin\\\\flutter.bat\" build *)"
+    ]
+  }
+}

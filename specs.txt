@@ -1,0 +1,1135 @@
+====================================================================
+PROJECT: ORBITALIS
+Revision: 2.0.0 — Full Technical Implementation Specification
+====================================================================
+
+APPLICATION OVERVIEW
+====================================================================
+
+Name:       Orbitalis
+Type:       Real-time space object tracking and launch monitoring platform
+Target:     Android (API 24+), iOS (14+)
+Flutter:    Latest stable SDK (3.x), Dart with sound null safety
+
+Purpose:
+  - Live satellite and ISS tracking with orbital propagation
+  - Rocket launch monitoring with countdown timers
+  - Space news feed
+  - Flyover and launch push notifications
+  - Interactive dark-map visualization of orbital paths
+
+Design reference:
+  - FlightRadar24 (dense live data + map)
+  - NASA mission control dashboards
+  - Modern satellite telemetry UIs
+
+====================================================================
+EXACT DEPENDENCY MANIFEST (pubspec.yaml)
+====================================================================
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # Routing
+  go_router: ^14.2.7
+
+  # Networking
+  dio: ^5.6.0
+  retrofit: ^4.1.0
+  pretty_dio_logger: ^1.4.0
+
+  # Local database
+  isar: ^3.1.0+1
+  isar_flutter_libs: ^3.1.0+1
+  path_provider: ^2.1.3
+
+  # Serialization
+  freezed_annotation: ^2.4.1
+  json_annotation: ^4.9.0
+
+  # Maps
+  flutter_map: ^7.0.2
+  latlong2: ^0.9.1
+
+  # Charts
+  fl_chart: ^0.68.0
+
+  # Animations
+  flutter_animate: ^4.5.0
+  lottie: ^3.1.0
+
+  # Notifications
+  flutter_local_notifications: ^17.2.2
+  timezone: ^0.9.4
+
+  # Background tasks
+  workmanager: ^0.5.2
+
+  # Location
+  geolocator: ^13.0.1
+  geocoding: ^3.0.0
+
+  # Image caching
+  cached_network_image: ^3.3.1
+
+  # Orbital propagation
+  # NOTE: sgp4_dart is a community Dart port of the SGP4 algorithm.
+  # Verify availability at pub.dev before use. If unavailable, use the
+  # vendored implementation described in PHASE 5 of this spec.
+  sgp4_dart: ^1.0.2
+
+  # UI utilities
+  shimmer: ^3.0.0
+  url_launcher: ^6.3.0
+  intl: ^0.19.0
+  connectivity_plus: ^6.0.5
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # Code generation
+  build_runner: ^2.4.12
+  riverpod_generator: ^2.4.3
+  freezed: ^2.5.2
+  json_serializable: ^6.8.0
+  retrofit_generator: ^8.1.0
+  isar_generator: ^3.1.0+1
+
+  # Linting
+  very_good_analysis: ^6.0.0
+
+  # Testing
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/animations/    # Lottie JSON files
+    - assets/images/        # Static images, logos
+    - assets/fonts/         # Custom typefaces (e.g. JetBrains Mono)
+
+====================================================================
+ANALYSIS OPTIONS (analysis_options.yaml)
+====================================================================
+
+include: package:very_good_analysis/analysis_options.yaml
+
+analyzer:
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "**/*.isar.dart"
+
+linter:
+  rules:
+    avoid_print: true
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+
+====================================================================
+PLATFORM CONFIGURATION
+====================================================================
+
+--------------------------------------------------------------------
+ANDROID  (android/app/src/main/AndroidManifest.xml)
+--------------------------------------------------------------------
+
+Required permissions:
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <uses-permission android:name="android.permission.VIBRATE"/>
+
+WorkManager registration:
+  <provider
+      android:name="androidx.startup.InitializationProvider"
+      android:authorities="${applicationId}.androidx-startup"
+      android:exported="false"
+      tools:node="merge">
+    <meta-data
+        android:name="androidx.work.WorkManagerInitializer"
+        android:value="androidx.startup" />
+  </provider>
+
+Flutter Local Notifications channel (in MainActivity or Application):
+  android:name=".Application"  (if using custom Application class)
+
+android/app/build.gradle:
+  minSdkVersion 24    (required by Isar, WorkManager, geolocator)
+  targetSdkVersion 34
+  compileSdkVersion 34
+
+--------------------------------------------------------------------
+iOS  (ios/Runner/Info.plist)
+--------------------------------------------------------------------
+
+Required keys:
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Orbitalis uses your location to calculate satellite flyover times.</string>
+
+  <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+  <string>Orbitalis uses your location in background for flyover alerts.</string>
+
+  <key>UIBackgroundModes</key>
+  <array>
+    <string>fetch</string>
+    <string>processing</string>
+  </array>
+
+Podfile: platform :ios, '14.0'
+
+====================================================================
+EXACT FOLDER STRUCTURE
+====================================================================
+
+lib/
+├── core/
+│   ├── constants/
+│   │   ├── app_constants.dart       # API base URLs, cache durations
+│   │   ├── map_constants.dart       # Default zoom, tile URL
+│   │   └── notification_constants.dart
+│   ├── errors/
+│   │   ├── app_exception.dart       # Freezed sealed class hierarchy
+│   │   └── failure.dart             # Domain-layer failure types
+│   ├── network/
+│   │   ├── dio_provider.dart        # Dio instance + interceptors
+│   │   ├── network_info.dart        # ConnectivityPlus wrapper
+│   │   └── interceptors/
+│   │       ├── auth_interceptor.dart
+│   │       └── error_interceptor.dart
+│   ├── router/
+│   │   ├── app_router.dart          # GoRouter configuration
+│   │   └── route_names.dart         # Named route constants
+│   ├── theme/
+│   │   ├── app_theme.dart           # ThemeData factory
+│   │   ├── app_colors.dart          # Color palette constants
+│   │   ├── app_text_styles.dart     # TextStyle definitions
+│   │   └── app_decorations.dart     # BoxDecoration helpers
+│   ├── utils/
+│   │   ├── date_formatter.dart
+│   │   ├── unit_converter.dart      # km/s ↔ mph, km ↔ miles
+│   │   └── coordinate_formatter.dart
+│   └── services/
+│       ├── isar_service.dart        # Isar DB singleton + schema registration
+│       ├── notification_service.dart
+│       └── location_service.dart
+│
+├── features/
+│   ├── home/
+│   │   ├── data/
+│   │   │   └── home_repository_impl.dart   # Aggregates ISS + launches + news
+│   │   ├── domain/
+│   │   │   └── home_repository.dart        # Abstract interface
+│   │   └── presentation/
+│   │       ├── home_screen.dart
+│   │       ├── providers/
+│   │       │   └── home_providers.dart
+│   │       └── widgets/
+│   │           ├── iss_card.dart
+│   │           ├── launches_strip.dart
+│   │           ├── news_feed.dart
+│   │           └── quick_actions_bar.dart
+│   │
+│   ├── tracking/
+│   │   ├── data/
+│   │   │   ├── sources/
+│   │   │   │   ├── tle_remote_source.dart   # CelesTrak HTTP fetch
+│   │   │   │   └── tle_local_source.dart    # Isar read/write
+│   │   │   ├── models/
+│   │   │   │   ├── tle_model.dart           # Isar collection
+│   │   │   │   └── satellite_position.dart  # Freezed value object
+│   │   │   └── tracking_repository_impl.dart
+│   │   ├── domain/
+│   │   │   ├── entities/
+│   │   │   │   └── satellite.dart           # Freezed domain entity
+│   │   │   ├── repositories/
+│   │   │   │   └── tracking_repository.dart
+│   │   │   └── use_cases/
+│   │   │       ├── get_satellites_use_case.dart
+│   │   │       └── propagate_position_use_case.dart
+│   │   └── presentation/
+│   │       ├── tracking_screen.dart
+│   │       ├── satellite_detail_screen.dart
+│   │       ├── providers/
+│   │       │   └── tracking_providers.dart
+│   │       └── widgets/
+│   │           ├── satellite_list_tile.dart
+│   │           ├── telemetry_readout.dart
+│   │           └── orbit_badge.dart
+│   │
+│   ├── map/
+│   │   ├── data/                            # (minimal — map uses tracking domain)
+│   │   ├── domain/
+│   │   └── presentation/
+│   │       ├── map_screen.dart
+│   │       ├── providers/
+│   │       │   └── map_providers.dart
+│   │       └── widgets/
+│   │           ├── satellite_marker.dart
+│   │           ├── orbit_path_layer.dart
+│   │           └── map_hud.dart
+│   │
+│   ├── launches/
+│   │   ├── data/
+│   │   │   ├── sources/
+│   │   │   │   ├── launch_remote_source.dart
+│   │   │   │   └── launch_local_source.dart
+│   │   │   ├── models/
+│   │   │   │   ├── launch_dto.dart          # Retrofit response + json_serializable
+│   │   │   │   └── launch_model.dart        # Isar collection
+│   │   │   └── launch_repository_impl.dart
+│   │   ├── domain/
+│   │   │   ├── entities/
+│   │   │   │   └── launch.dart              # Freezed entity
+│   │   │   ├── repositories/
+│   │   │   │   └── launch_repository.dart
+│   │   │   └── use_cases/
+│   │   │       └── get_upcoming_launches_use_case.dart
+│   │   └── presentation/
+│   │       ├── launches_screen.dart
+│   │       ├── launch_detail_screen.dart
+│   │       ├── providers/
+│   │       │   └── launch_providers.dart
+│   │       └── widgets/
+│   │           ├── launch_card.dart
+│   │           ├── countdown_timer.dart
+│   │           └── launch_status_badge.dart
+│   │
+│   ├── notifications/
+│   │   ├── data/
+│   │   │   └── notification_repository_impl.dart
+│   │   ├── domain/
+│   │   │   ├── entities/
+│   │   │   │   └── flyover_alert.dart
+│   │   │   └── repositories/
+│   │   │       └── notification_repository.dart
+│   │   └── presentation/
+│   │       ├── notifications_screen.dart
+│   │       ├── providers/
+│   │       │   └── notification_providers.dart
+│   │       └── widgets/
+│   │           └── alert_card.dart
+│   │
+│   └── settings/
+│       ├── data/
+│       │   └── settings_repository_impl.dart  # SharedPreferences
+│       ├── domain/
+│       │   ├── entities/
+│       │   │   └── app_settings.dart          # Freezed
+│       │   └── repositories/
+│       │       └── settings_repository.dart
+│       └── presentation/
+│           ├── settings_screen.dart
+│           ├── providers/
+│           │   └── settings_providers.dart
+│           └── widgets/
+│               └── settings_tile.dart
+│
+├── shared/
+│   ├── widgets/
+│   │   ├── glass_container.dart      # Glassmorphism BoxDecoration + blur
+│   │   ├── glow_border.dart          # Animated glowing border
+│   │   ├── shimmer_card.dart         # Shimmer loading skeleton
+│   │   ├── section_header.dart       # Reusable section label
+│   │   ├── orbitalis_app_bar.dart    # Custom frosted AppBar
+│   │   ├── status_dot.dart           # Pulsing live indicator
+│   │   ├── data_readout.dart         # Label + value pair widget
+│   │   └── error_state_widget.dart   # Full-screen error + retry
+│   ├── models/
+│   │   └── result.dart               # Freezed Result<T> union
+│   ├── extensions/
+│   │   ├── datetime_extensions.dart
+│   │   ├── double_extensions.dart
+│   │   └── context_extensions.dart   # MediaQuery, theme shortcuts
+│   └── animations/
+│       ├── fade_slide_transition.dart
+│       └── staggered_list.dart
+│
+└── main.dart
+
+====================================================================
+REAL API CONTRACTS
+====================================================================
+
+--------------------------------------------------------------------
+1. TLE DATA — CelesTrak
+--------------------------------------------------------------------
+
+Endpoint:
+  GET https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle
+
+Response format: plain text (not JSON)
+  ISS (ZARYA)
+  1 25544U 98067A   24001.50000000  .00001234  00000-0  12345-4 0  9999
+  2 25544  51.6400 001.0000 0001234  00.0000 000.0000 15.50000000000001
+  (repeats for each satellite — 3 lines per satellite)
+
+Parsing rules:
+  Line 0: Satellite name (strip whitespace)
+  Line 1: TLE line 1 (starts with "1 ")
+  Line 2: TLE line 2 (starts with "2 ")
+
+Cache strategy:
+  - Store parsed TLEs in Isar
+  - Refresh if cached timestamp > 24 hours old
+  - Always serve from cache; fetch in background
+
+ISS NORAD ID: 25544
+
+--------------------------------------------------------------------
+2. ROCKET LAUNCHES — Launch Library 2
+--------------------------------------------------------------------
+
+Base URL: https://ll.thespacedevs.com/2.2.0/
+
+NOTE: The free tier is rate-limited to 15 requests/hour.
+Apply caching aggressively (minimum 10-minute stale time).
+
+Endpoint: GET /launch/upcoming/
+Query params:
+  limit=10
+  offset=0
+  mode=detailed
+
+Key response fields (from JSON):
+  results[].id                    String  — UUID
+  results[].name                  String  — "Falcon 9 | Starlink ..."
+  results[].net                   String  — ISO-8601 launch datetime (NET)
+  results[].status.abbrev         String  — "Go", "TBC", "Hold", etc.
+  results[].launch_service_provider.name   String
+  results[].launch_service_provider.logo_url   String (nullable)
+  results[].rocket.configuration.name     String
+  results[].mission.description   String (nullable)
+  results[].mission.type          String (nullable)
+  results[].pad.name              String
+  results[].pad.location.name     String
+  results[].pad.latitude          String (parse as double)
+  results[].pad.longitude         String (parse as double)
+  results[].vidURLs[].url         String  — livestream URL
+
+--------------------------------------------------------------------
+3. SPACE NEWS — Spaceflight News API v4
+--------------------------------------------------------------------
+
+Base URL: https://api.spaceflightnewsapi.net/v4/
+
+Endpoint: GET /articles/
+Query params:
+  limit=20
+  offset=0
+
+Key response fields:
+  results[].id              Int
+  results[].title           String
+  results[].summary         String
+  results[].url             String  — article URL
+  results[].image_url       String  — thumbnail
+  results[].news_site       String  — source name
+  results[].published_at    String  — ISO-8601
+
+--------------------------------------------------------------------
+4. MAP TILES — CartoDB Dark Matter (free, no API key)
+--------------------------------------------------------------------
+
+Tile URL template:
+  https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png
+
+Subdomains: ["a", "b", "c", "d"]
+Max zoom: 19
+Attribution: "© OpenStreetMap contributors © CARTO"
+
+====================================================================
+CORE IMPLEMENTATION PATTERNS
+====================================================================
+
+--------------------------------------------------------------------
+Result type  (shared/models/result.dart)
+--------------------------------------------------------------------
+
+@freezed
+sealed class Result<T> with _$Result<T> {
+  const factory Result.success(T data) = Success<T>;
+  const factory Result.failure(Failure failure) = Failure<T>;
+}
+
+@freezed
+sealed class Failure with _$Failure {
+  const factory Failure.network({required String message}) = NetworkFailure;
+  const factory Failure.cache({required String message})   = CacheFailure;
+  const factory Failure.parse({required String message})   = ParseFailure;
+  const factory Failure.unknown({required String message}) = UnknownFailure;
+}
+
+--------------------------------------------------------------------
+Isar DB singleton  (core/services/isar_service.dart)
+--------------------------------------------------------------------
+
+class IsarService {
+  IsarService._();
+  static IsarService? _instance;
+  static IsarService get instance => _instance ??= IsarService._();
+
+  late final Isar _isar;
+  bool _initialized = false;
+
+  Future<Isar> open() async {
+    if (_initialized) return _isar;
+    final dir = await getApplicationDocumentsDirectory();
+    _isar = await Isar.open(
+      [TleModelSchema, LaunchModelSchema, ArticleModelSchema],
+      directory: dir.path,
+    );
+    _initialized = true;
+    return _isar;
+  }
+}
+
+// Provider:
+@Riverpod(keepAlive: true)
+Future<Isar> isar(IsarRef ref) => IsarService.instance.open();
+
+--------------------------------------------------------------------
+Dio provider  (core/network/dio_provider.dart)
+--------------------------------------------------------------------
+
+@Riverpod(keepAlive: true)
+Dio dio(DioRef ref) {
+  final dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 10),
+      receiveTimeout: const Duration(seconds: 15),
+      sendTimeout: const Duration(seconds: 10),
+    ),
+  );
+  dio.interceptors.add(PrettyDioLogger(requestBody: false));
+  dio.interceptors.add(ErrorInterceptor());
+  return dio;
+}
+
+--------------------------------------------------------------------
+TLE Model  (features/tracking/data/models/tle_model.dart)
+--------------------------------------------------------------------
+
+@collection
+class TleModel {
+  Id id = Isar.autoIncrement;
+
+  @Index(unique: true)
+  late String noradId;
+
+  late String name;
+  late String line1;
+  late String line2;
+  late DateTime fetchedAt;
+}
+
+--------------------------------------------------------------------
+Satellite domain entity  (features/tracking/domain/entities/satellite.dart)
+--------------------------------------------------------------------
+
+@freezed
+class Satellite with _$Satellite {
+  const factory Satellite({
+    required String noradId,
+    required String name,
+    required String line1,
+    required String line2,
+    // Propagated fields (updated by stream):
+    @Default(0) double latitude,
+    @Default(0) double longitude,
+    @Default(0) double altitudeKm,
+    @Default(0) double velocityKmS,
+    @Default(0) double orbitalPeriodMin,
+  }) = _Satellite;
+}
+
+--------------------------------------------------------------------
+SGP4 Propagation pattern
+--------------------------------------------------------------------
+
+The propagation loop runs inside a Riverpod StreamProvider.
+Positions are computed every second using the local SGP4 algorithm.
+
+import 'package:sgp4_dart/sgp4_dart.dart';
+
+Stream<SatellitePosition> propagate(TleModel tle) async* {
+  final satrec = twoline2rv(tle.line1, tle.line2, wgs84);
+  while (true) {
+    final now = DateTime.now().toUtc();
+    final result = sgp4(satrec, _minutesSinceEpoch(satrec, now));
+    if (result.error == 0) {
+      final pos = eciToGeodetic(result.r, gstime(now));
+      yield SatellitePosition(
+        latitude:      degrees(pos.latitude),
+        longitude:     degrees(pos.longitude),
+        altitudeKm:    pos.height,
+        velocityKmS:   sqrt(pow(result.v[0], 2) + pow(result.v[1], 2) + pow(result.v[2], 2)),
+      );
+    }
+    await Future.delayed(const Duration(seconds: 1));
+  }
+}
+
+// NOTE: If sgp4_dart API differs from above, adapt accordingly.
+// The twoline2rv / sgp4 / eciToGeodetic function names follow
+// standard SGP4 port conventions (see: python-sgp4 API reference).
+
+--------------------------------------------------------------------
+Tracking Repository
+--------------------------------------------------------------------
+
+abstract class TrackingRepository {
+  Future<Result<List<Satellite>>> getSatellites();
+  Stream<SatellitePosition> watchPosition(String noradId);
+  Future<Result<void>> refreshTleData();
+}
+
+Implementation strategy:
+1. getSatellites(): check Isar cache. If empty or stale (>24h), fetch
+   from CelesTrak, parse, store, return.
+2. watchPosition(noradId): retrieve TLE from Isar, run SGP4 stream.
+3. refreshTleData(): force re-fetch from CelesTrak.
+
+--------------------------------------------------------------------
+Riverpod providers  (features/tracking/presentation/providers/)
+--------------------------------------------------------------------
+
+// Satellite list — async, kept alive
+@Riverpod(keepAlive: true)
+Future<List<Satellite>> satellites(SatellitesRef ref) {
+  final repo = ref.watch(trackingRepositoryProvider);
+  return repo.getSatellites().then((r) => r.fold(
+    (data) => data,
+    (failure) => throw failure,
+  ));
+}
+
+// Per-satellite live position stream
+@riverpod
+Stream<SatellitePosition> satellitePosition(
+  SatellitePositionRef ref,
+  String noradId,
+) {
+  final repo = ref.watch(trackingRepositoryProvider);
+  return repo.watchPosition(noradId);
+}
+
+// ISS convenience provider
+@riverpod
+Stream<SatellitePosition> issPosition(IssPositionRef ref) =>
+    ref.watch(satellitePositionProvider('25544').stream);
+
+--------------------------------------------------------------------
+GoRouter configuration  (core/router/app_router.dart)
+--------------------------------------------------------------------
+
+Routes:
+  /               → HomeScreen
+  /map            → MapScreen
+  /tracking       → TrackingScreen (satellite list)
+  /tracking/:id   → SatelliteDetailScreen
+  /launches       → LaunchesScreen
+  /launches/:id   → LaunchDetailScreen
+  /notifications  → NotificationsScreen
+  /settings       → SettingsScreen
+
+Shell route: wraps /, /map, /tracking, /launches with bottom nav.
+Detail screens (/tracking/:id, /launches/:id) push on top of shell.
+
+--------------------------------------------------------------------
+Bottom Navigation destinations
+--------------------------------------------------------------------
+
+Index  Icon                    Route
+0      Icons.home_rounded      /
+1      Icons.map_rounded       /map
+2      Icons.track_changes     /tracking
+3      Icons.rocket_launch     /launches
+4      Icons.settings_rounded  /settings
+
+====================================================================
+VISUAL DESIGN SYSTEM
+====================================================================
+
+--------------------------------------------------------------------
+Color palette  (core/theme/app_colors.dart)
+--------------------------------------------------------------------
+
+static const Color background       = Color(0xFF050A18);  // near-black navy
+static const Color surface          = Color(0xFF0B1426);  // card surface
+static const Color surfaceVariant   = Color(0xFF0F1C35);  // elevated surface
+static const Color border           = Color(0xFF1A2E4A);  // subtle divider
+static const Color cyan             = Color(0xFF00D4FF);  // primary accent
+static const Color electricBlue     = Color(0xFF0080FF);  // secondary accent
+static const Color glowCyan         = Color(0x4000D4FF);  // glow overlay (25% alpha)
+static const Color orange           = Color(0xFFFF7043);  // warning / countdown
+static const Color green            = Color(0xFF00E676);  // success / "Go" status
+static const Color textPrimary      = Color(0xFFECEFF1);
+static const Color textSecondary    = Color(0xFF78909C);
+static const Color textMuted        = Color(0xFF37474F);
+
+--------------------------------------------------------------------
+Typography  (core/theme/app_text_styles.dart)
+--------------------------------------------------------------------
+
+Use JetBrains Mono for telemetry readouts (monospaced numerical data).
+Use the system sans-serif (or bundled Outfit/Space Grotesk) for labels.
+
+Key styles:
+  displayLarge:    28sp, electricBlue, letterSpacing 2.0, weight W300
+  headlineMedium:  18sp, textPrimary, weight W600
+  titleSmall:      12sp, textSecondary, letterSpacing 1.5, uppercase
+  bodyMedium:      14sp, textPrimary
+  labelSmall:      10sp, textSecondary, letterSpacing 1.2
+  monoLarge:       22sp, JetBrains Mono, cyan, weight W500   # telemetry
+  monoMedium:      14sp, JetBrains Mono, textSecondary
+  monoSmall:       11sp, JetBrains Mono, textMuted
+
+--------------------------------------------------------------------
+Glassmorphism container  (shared/widgets/glass_container.dart)
+--------------------------------------------------------------------
+
+class GlassContainer extends StatelessWidget {
+  // wraps child in ClipRRect + BackdropFilter (ImageFilter.blur)
+  // overlay color: Colors.white.withOpacity(0.05)
+  // border: 1px solid AppColors.border
+  // blur sigma: 12.0 (sigmaX and sigmaY)
+  // border radius: configurable, default 16
+}
+
+--------------------------------------------------------------------
+Glow border (shared/widgets/glow_border.dart)
+--------------------------------------------------------------------
+
+Implemented using DecoratedBox with BoxShadow:
+  BoxShadow(
+    color: AppColors.glowCyan,
+    blurRadius: 8,
+    spreadRadius: 1,
+  )
+Animate blurRadius between 4 and 12 using flutter_animate repeat.
+
+--------------------------------------------------------------------
+Status dot  (shared/widgets/status_dot.dart)
+--------------------------------------------------------------------
+
+Small circle (8px) that pulses using flutter_animate:
+  .animate(onPlay: (c) => c.repeat())
+  .scaleXY(begin: 0.8, end: 1.2, duration: 900.ms)
+  .fadeOut(begin: 0.6, duration: 900.ms)
+
+Color variants: green (live), orange (upcoming), textMuted (offline)
+
+====================================================================
+HOME DASHBOARD SPECIFICATION
+====================================================================
+
+Layout: CustomScrollView with SliverList + SliverPadding
+
+Sections (top to bottom):
+  1. OrbitalisAppBar (frosted, logo + settings icon)
+  2. IssCard           — 240dp tall, glass, live telemetry stream
+  3. SectionHeader     — "UPCOMING LAUNCHES"
+  4. LaunchesStrip     — horizontal PageView of LaunchCard widgets
+  5. SectionHeader     — "SPACE NEWS"
+  6. NewsFeed          — vertical list of NewsArticleCard widgets
+  7. SectionHeader     — "QUICK ACTIONS"
+  8. QuickActionsBar   — row of 4 tappable icon tiles
+
+IssCard telemetry fields:
+  - Latitude / Longitude (formatted with °N/S, °E/W)
+  - Altitude (km)
+  - Velocity (km/s)
+  - Orbital period (min)
+  - Live pulsing status dot
+  Data source: issPositionProvider stream
+
+LaunchCard minimum content:
+  - Mission name
+  - Provider name + logo (CachedNetworkImage)
+  - Launch site
+  - NET datetime formatted as relative ("in 3d 4h 22m")
+  - Status badge (Go / TBC / Hold)
+  - CountdownTimer widget
+
+Loading states:
+  Use shimmer: Shimmer.fromColors() wrapping placeholder containers
+  Show shimmer while AsyncValue.isLoading
+
+Error states:
+  Show ErrorStateWidget with retry button that calls ref.invalidate()
+
+====================================================================
+MAP FEATURE SPECIFICATION
+====================================================================
+
+Widget tree:
+  MapScreen
+  └── FlutterMap
+      ├── TileLayer (CartoDB Dark Matter)
+      ├── OrbitPathLayer (CustomPainter via PolylineLayer)
+      ├── SatelliteMarkerLayer (MarkerLayer)
+      └── MapHud (Stack overlay — zoom controls, center-on-ISS FAB)
+
+SatelliteMarker:
+  - Cyan dot with outer glow ring
+  - Animated (pulse) for ISS specifically
+  - Tap: shows bottom sheet with live telemetry
+
+OrbitPathLayer:
+  - Render 90-minute predicted groundtrack as PolylineLayer
+  - Compute 90 points at 1-minute intervals using SGP4
+  - Color: electricBlue with 40% opacity
+  - Handle antimeridian crossing: split polyline at ±180°
+
+Initial camera: LatLng(0, 0), zoom 2.5 (whole-Earth view)
+
+Follow mode: when enabled, camera animates to ISS position each update.
+Use MapController.move() inside issPositionProvider listener.
+
+Dark tile loading indicator: CircularProgressIndicator in cyan
+
+====================================================================
+LAUNCHES FEATURE SPECIFICATION
+====================================================================
+
+LaunchesScreen: TabBar with two tabs:
+  Tab 1: "UPCOMING"  — list of upcoming launches, paginated
+  Tab 2: "PREVIOUS"  — past launches (GET /launch/previous/)
+
+Pagination:
+  Use a ScrollController + NotificationListener to detect end of list.
+  Append next page via ref.read(launchesProvider.notifier).loadMore().
+
+LaunchDetailScreen fields:
+  - Mission name (hero title)
+  - Provider + rocket name
+  - Launch window (NET + window_start / window_end if available)
+  - Countdown timer (live, counts down to NET)
+  - Mission description
+  - Launch pad name + location
+  - Map widget (flutter_map, small, centered on pad coordinates)
+  - "Watch Live" button (url_launcher → vidURLs[0].url)
+  - Probability badge (if probability field non-null)
+
+CountdownTimer widget:
+  - Uses Stream.periodic(Duration(seconds: 1))
+  - Formats as D HH:MM:SS
+  - Color shifts: green > 1 day, orange < 1 day, red < 1 hour
+  - JetBrains Mono font
+
+====================================================================
+NOTIFICATION FEATURE SPECIFICATION
+====================================================================
+
+Channels (Android):
+  ID: "flyover_alerts",   name: "Flyover Alerts",   importance: high
+  ID: "launch_reminders", name: "Launch Reminders",  importance: high
+
+Flyover alert logic:
+  - User selects satellite to follow
+  - WorkManager periodic task (every 15 min) checks:
+    - Current user location (geolocator)
+    - SGP4-propagated satellite pass within next 10 min
+    - If satellite elevation > 10° from user lat/lon: fire notification
+  - Pass calculation: iterate SGP4 positions + compute elevation using
+    observer lat/lon/alt → azimuth/elevation conversion (standard formula)
+
+Launch reminder logic:
+  - User taps "Remind Me" on a launch
+  - Schedule flutter_local_notifications at NET minus configurable lead
+    (default: 1 hour, 10 minutes)
+
+NotificationsScreen: list of pending scheduled notifications
+  - Show: target name, alert type, scheduled time
+  - Allow cancellation
+
+====================================================================
+SETTINGS FEATURE SPECIFICATION
+====================================================================
+
+Stored in SharedPreferences via SettingsRepositoryImpl.
+
+Settings fields (AppSettings Freezed entity):
+  unitSystem:        "metric" | "imperial"
+  flyoverLeadMinutes: int (default 30)
+  favoriteNoradIds:  List<String>
+  notifyLaunches:    bool (default true)
+  notifyFlyovers:    bool (default true)
+  tleRefreshHours:   int (default 24)
+
+SettingsScreen sections:
+  1. Units           — toggle metric / imperial
+  2. Notifications   — launch reminders toggle + lead time selector
+                     — flyover alerts toggle
+  3. Data            — manual TLE refresh button + last-refresh timestamp
+  4. About           — app version (from package_info_plus)
+                     — data source attribution
+  5. Favorites       — list of tracked satellites with remove option
+
+====================================================================
+CODE GENERATION COMMANDS
+====================================================================
+
+Run after any change to annotated files:
+
+  dart run build_runner build --delete-conflicting-outputs
+
+Run during development (watch mode):
+
+  dart run build_runner watch --delete-conflicting-outputs
+
+Generated file types:
+  *.g.dart       — json_serializable, riverpod_generator, isar_generator
+  *.freezed.dart — freezed
+  *.retrofit.dart — retrofit_generator (if retrofit annotations used)
+
+All generated files are gitignored:
+  *.g.dart
+  *.freezed.dart
+  *.retrofit.dart
+
+====================================================================
+TESTING SPECIFICATION
+====================================================================
+
+Test targets:
+
+1. Repository tests
+   test/features/tracking/tracking_repository_test.dart
+   test/features/launches/launch_repository_test.dart
+   - Mock HTTP responses with mocktail + DioMockAdapter
+   - Verify cache hit / cache miss behavior
+   - Verify Failure types on network error
+
+2. Provider tests
+   test/features/tracking/providers/tracking_providers_test.dart
+   - Use ProviderContainer for isolated provider testing
+   - Verify AsyncValue.loading → AsyncValue.data transitions
+   - Verify error propagation to AsyncValue.error
+
+3. Widget tests
+   test/features/home/widgets/iss_card_test.dart
+   test/features/launches/widgets/countdown_timer_test.dart
+   - Pump widget with overrideWithValue providers
+   - Verify telemetry readout renders correct values
+   - Verify countdown timer counts down correctly
+
+Mock setup (mocktail):
+  class MockTrackingRepository extends Mock implements TrackingRepository {}
+  class MockDio extends Mock implements Dio {}
+
+====================================================================
+IMPLEMENTATION PHASES
+====================================================================
+
+####################################################################
+PHASE 1 — PROJECT INITIALIZATION
+####################################################################
+
+Commands:
+  flutter create orbitalis --empty --org com.orbitalis
+  cd orbitalis
+
+Tasks:
+  1. Overwrite pubspec.yaml with dependency manifest from this spec.
+  2. Create analysis_options.yaml.
+  3. Run: flutter pub get
+  4. Create ALL folders in the exact structure defined above (empty
+     .gitkeep files are acceptable for leaf directories at this stage).
+  5. Create asset directories: assets/animations/, assets/images/,
+     assets/fonts/
+  6. Configure AndroidManifest.xml permissions.
+  7. Configure Info.plist keys.
+  8. Set minSdkVersion 24 in android/app/build.gradle.
+  9. Add *.g.dart, *.freezed.dart to .gitignore.
+
+Deliverable: compilable empty project with correct structure.
+Stop and wait for approval.
+
+####################################################################
+PHASE 2 — CORE INFRASTRUCTURE
+####################################################################
+
+Tasks:
+  1. Implement app_colors.dart, app_text_styles.dart, app_decorations.dart
+  2. Implement app_theme.dart (ThemeData.dark() configured with palette)
+  3. Implement isar_service.dart + isar Riverpod provider
+  4. Implement dio_provider.dart
+  5. Implement error_interceptor.dart (maps DioException → AppException)
+  6. Implement result.dart (Freezed Result<T>)
+  7. Implement shared/widgets: GlassContainer, GlowBorder, StatusDot,
+     ShimmerCard, SectionHeader, DataReadout, ErrorStateWidget
+  8. Implement route_names.dart and app_router.dart (shell route + all routes)
+  9. Implement main.dart: ProviderScope → MaterialApp.router
+  10. Run: dart run build_runner build --delete-conflicting-outputs
+
+Deliverable: compilable app with theme, router, empty screens, shared widgets.
+Stop and wait for approval.
+
+####################################################################
+PHASE 3 — SHARED UI & NAVIGATION
+####################################################################
+
+Tasks:
+  1. Implement OrbitalisAppBar (frosted, custom)
+  2. Implement animated bottom navigation bar shell with staggered
+     entrance animation (flutter_animate, slide+fade per item)
+  3. Implement FadeSlideTransition and StaggeredList shared animations
+  4. Create placeholder screens for all 5 routes showing correct
+     AppBar + layout scaffold (no data yet)
+  5. Verify navigation between all tabs works
+
+Deliverable: navigable shell with animated nav bar and placeholder screens.
+Stop and wait for approval.
+
+####################################################################
+PHASE 4 — HOME DASHBOARD
+####################################################################
+
+Tasks:
+  1. Implement IssCard (uses issPositionProvider — mock with static
+     data at this stage if tracking not yet implemented)
+  2. Implement LaunchesStrip (uses upcoming launches — mock if needed)
+  3. Implement NewsFeed and NewsArticleCard
+  4. Implement QuickActionsBar
+  5. Implement HomeScreen with CustomScrollView, pull-to-refresh,
+     shimmer loading states, staggered entry animations
+  6. Wire real issPositionProvider once PHASE 5 is complete
+
+Deliverable: Home screen with all sections, animations, loading states.
+Stop and wait for approval.
+
+####################################################################
+PHASE 5 — REAL-TIME SATELLITE TRACKING
+####################################################################
+
+Tasks:
+  1. Implement TleModel (Isar collection)
+  2. Implement TleRemoteSource (CelesTrak fetch + text parsing)
+  3. Implement TleLocalSource (Isar CRUD)
+  4. Implement TrackingRepositoryImpl (cache-first, 24h TTL logic)
+  5. Implement PropagatePositionUseCase using sgp4_dart
+  6. Implement tracking Riverpod providers (satellites, satellitePosition,
+     issPosition) with 1-second stream ticks
+  7. Implement TrackingScreen (searchable satellite list, live altitude)
+  8. Implement SatelliteDetailScreen (full telemetry readout)
+  9. Wire IssCard in HomeScreen to real issPositionProvider
+
+Deliverable: Live satellite positions on tracking screen + ISS card.
+Stop and wait for approval.
+
+####################################################################
+PHASE 6 — MAP VISUALIZATION
+####################################################################
+
+Tasks:
+  1. Implement OrbitPathLayer (90-min groundtrack via PolylineLayer)
+  2. Implement SatelliteMarker with glow + pulse animation
+  3. Implement MapHud (zoom buttons, follow-ISS FAB)
+  4. Implement MapScreen with CartoDB dark tiles
+  5. Implement MapController follow mode for ISS
+  6. Handle antimeridian wrapping for orbit paths
+
+Deliverable: Interactive dark map with live satellite markers and orbit paths.
+Stop and wait for approval.
+
+####################################################################
+PHASE 7 — ROCKET LAUNCHES
+####################################################################
+
+Tasks:
+  1. Implement LaunchDto (Retrofit/json_serializable response model)
+  2. Implement LaunchModel (Isar collection)
+  3. Implement LaunchRemoteSource (Launch Library 2, rate-limit aware)
+  4. Implement LaunchRepositoryImpl (cache, 10-min stale time)
+  5. Implement launch Riverpod providers with pagination
+  6. Implement LaunchesScreen (TabBar: upcoming / previous)
+  7. Implement LaunchDetailScreen (all fields, map, watch-live button)
+  8. Implement CountdownTimer widget (live stream, color shifts)
+
+Deliverable: Full launches feature with countdown and detail view.
+Stop and wait for approval.
+
+####################################################################
+PHASE 8 — NOTIFICATIONS & SETTINGS
+####################################################################
+
+Tasks:
+  1. Implement NotificationService (channel registration, permission request)
+  2. Implement FlyoverAlert entity and calculation logic
+  3. Implement WorkManager background task for flyover detection
+  4. Implement launch reminder scheduling from LaunchDetailScreen
+  5. Implement NotificationsScreen (pending alerts list)
+  6. Implement AppSettings Freezed entity
+  7. Implement SettingsRepositoryImpl (SharedPreferences)
+  8. Implement SettingsScreen (all sections)
+  9. Wire unitSystem setting into telemetry readouts (km ↔ miles)
+
+Deliverable: Working notifications and settings.
+Stop and wait for approval.
+
+####################################################################
+PHASE 9 — SPACE NEWS
+####################################################################
+
+Tasks:
+  1. Implement ArticleDto (Retrofit/json_serializable)
+  2. Implement NewsRemoteSource (Spaceflight News API)
+  3. Implement news Riverpod provider with pagination
+  4. Implement NewsFeed in HomeScreen (wire real data)
+  5. Implement full-screen article WebView or url_launcher fallback
+
+Deliverable: Live news feed in home dashboard.
+Stop and wait for approval.
+
+####################################################################
+PHASE 10 — POLISH & FINALIZATION
+####################################################################
+
+Tasks:
+  1. Audit all AnimatedWidgets — ensure consistent durations and curves
+  2. Audit all shimmer/loading states — ensure coverage on all async data
+  3. Audit error states — retry paths must work on all screens
+  4. Verify offline behavior: stale cache served, offline banner shown
+  5. Run flutter analyze — resolve all warnings
+  6. Run flutter test — all tests green
+  7. Run flutter build apk --release — verify clean release build
+  8. Review for accessibility: minimum 44px tap targets, contrast ratios
+
+Deliverable: Production-ready build with no analyzer warnings.
+
+====================================================================
+ANTI-PATTERNS (MUST NOT DO)
+====================================================================
+
+- Do NOT use Google Maps or Mapbox (flutter_map only)
+- Do NOT use Provider, Bloc, GetX, or setState for business logic
+- Do NOT place API calls, SGP4 computation, or DB access in widgets
+- Do NOT use plain Material cards without custom decoration
+- Do NOT use default Flutter blue/white theme on any screen
+- Do NOT fetch TLE data more frequently than once per 24 hours
+- Do NOT call Launch Library 2 more frequently than once per 10 minutes
+- Do NOT generate entire app in one pass — follow phases strictly
+- Do NOT use fake/hardcoded satellite coordinates
+- Do NOT skip build_runner after modifying annotated files
+- Do NOT commit *.g.dart or *.freezed.dart files
+
+====================================================================
+END OF SPECIFICATION
+====================================================================
